@@ -1,0 +1,75 @@
+version: "3"
+
+services:
+ 
+
+  mongodb:
+    image: mongo:4.4
+    container_name: mongodb
+    ports:
+      - "27017:27017"  # Expose MongoDB on localhost:27017
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=example0
+    volumes:
+      - mongodb_data:/data/db
+      - ./init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    networks:
+      - app_network
+
+  
+  elasticsearch:
+    image: elasticsearch:7.9.1
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - http.host=0.0.0.0
+      - transport.host=0.0.0.0
+      - xpack.security.enabled=false
+      - xpack.monitoring.enabled=false
+      - cluster.name=elasticsearch
+      - bootstrap.memory_lock=true
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+      - ./elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+    ports:
+      - 9200:9200
+      - 9300:9300
+    networks:
+      - app_network
+
+  kibana:
+    image: kibana:7.9.1
+    container_name: kibana
+
+    volumes:
+      - ./kibana.yml:/usr/share/kibana/config/kibana.yml
+    ports:
+      - 5601:5601
+    networks:
+      - app_network
+
+ 
+  logstash-elastic-mdb:
+    build:
+      context: ./logstash-elastic-mdb
+    container_name: logstash-elastic-mdb
+    depends_on:
+      - elasticsearch
+    ports:
+      - "5066:5044"  # Logstash input port
+
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local
+  es_data:
+    driver: local
+  esdata:
+    driver: local

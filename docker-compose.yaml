@@ -1,0 +1,204 @@
+version: "3"
+
+services:
+  django:
+    build:
+      context: ./ecommerce_back
+      args:
+        DB_NAME: ecommerce
+        DB_HOST: mongodb  # Corrected to the service name
+        DB_PORT: 27017
+    container_name: django_app
+    ports:
+      - "8000:8000"  # Expose Django app on localhost:8000
+    depends_on:
+      - mongodb
+      - redis
+    environment:
+      - SECRET_KEY=kobl@t=yw9d*0y%jt2gjnq78=u!z_rrxb&w8e47l!(jz@m79zy
+      - DEBUG=True
+      - DB_NAME=ecommerce
+      - DB_HOST=mongodb  # Corrected to the service name
+      - DB_PORT=27017
+      - CELERY_BROKER_URL=redis://redis:6379/0  # Celery broker URL
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=example0
+    command: python manage.py runserver 0.0.0.0:8000  # Corrected internal port to match mapping
+    volumes:
+      - ./ecommerce_back:/app
+      - ./media:/app/media
+      - ./static:/app/static
+    networks:
+      - app_network
+
+  mongodb:
+    image: mongo:4.4
+    container_name: mongodb
+    ports:
+      - "27017:27017"  # Expose MongoDB on localhost:27017
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=example0
+    volumes:
+      - mongodb_data:/data/db
+      - ./init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    networks:
+      - app_network
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - app_network
+
+  celery:
+    build:
+      context: ./ecommerce_back
+    container_name: celery_worker
+    command: celery --app=djecommerce worker --loglevel=info
+    depends_on:
+      - django
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    volumes:
+      - ./ecommerce_back:/app
+    networks:
+      - app_network
+
+  celery-beat:
+    build:
+      context: ./ecommerce_back
+    container_name: celery_beat
+    command: ["celery", "-A", "djecommerce", "beat", "--loglevel=info"]
+    depends_on:
+      - django
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    volumes:
+      - ./ecommerce_back:/app
+    networks:
+      - app_network
+
+  flower:
+    build:
+      context: ./ecommerce_back
+    command: celery -A djecommerce flower --port=5555 --address=0.0.0.0
+    container_name: flower
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - celery
+      - celery-beat
+    networks:
+      - app_network
+  logstash:
+    build:
+      context: ./logstash
+    container_name: logstash
+    depends_on:
+      - redis
+    ports:
+      - "5044:5044"  # Logstash input port
+
+    networks:
+      - app_network
+  elasticsearch:
+    image: elasticsearch:7.9.1
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - http.host=0.0.0.0
+      - transport.host=0.0.0.0
+      - xpack.security.enabled=false
+      - xpack.monitoring.enabled=false
+      - cluster.name=elasticsearch
+      - bootstrap.memory_lock=true
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+      - ./elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+    ports:
+      - 9200:9200
+      - 9300:9300
+    networks:
+      - app_network
+
+  kibana:
+    image: kibana:7.9.1
+    container_name: kibana
+
+    volumes:
+      - ./kibana.yml:/usr/share/kibana/config/kibana.yml
+    ports:
+      - 5601:5601
+    networks:
+      - app_network
+
+  logstash-elastic:
+    build:
+      context: ./logstash-elastic
+    container_name: logstash-elastic
+    depends_on:
+      - elasticsearch
+    ports:
+      - "5065:5044"  # Logstash input port
+
+    networks:
+      - app_network
+  logstash-elastic-mdb:
+    build:
+      context: ./logstash-elastic-mdb
+    container_name: logstash-elastic-mdb
+    depends_on:
+      - elasticsearch
+    ports:
+      - "5066:5044"  # Logstash input port
+
+    networks:
+      - app_network
+  cassandra:
+    image: cassandra:latest
+    container_name: cassandra_single
+    environment:
+      - CASSANDRA_CLUSTER_NAME=TestCluster
+      - CASSANDRA_NUM_TOKENS=256
+      - CASSANDRA_SEEDS=cassandra_single
+    ports:
+      - "9042:9042"  # Cassandra CQL Port
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+      - ./init-cassandra.cql:/docker-entrypoint-initdb.d/init-cassandra.cql # Mount the script to the init directory
+    networks:
+      - app_network
+    command: ["sh", "-c", "docker-entrypoint.sh cassandra -f && /docker-entrypoint-initdb.d/init-cassandra.cql"]  # Run the script after Cassandra starts
+  cassandra-web:
+    build: ./cassandra-web
+    image: dcagatay/cassandra-web:latest
+    depends_on:
+      - cassandra
+    ports:
+      - 3000:3000
+    environment:
+      CASSANDRA_HOST_IPS: cassandra_single
+      CASSANDRA_PORT: 9042
+      CASSANDRA_USER: cassandra
+      CASSANDRA_PASSWORD: cassandra
+    restart: unless-stopped
+
+networks:
+  app_network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local
+  es_data:
+    driver: local
+  esdata:
+    driver: local
+  cassandra_data:
+    driver: local
